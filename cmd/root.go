@@ -1,6 +1,3 @@
-/*
-Copyright © 2024 NAME HERE <EMAIL ADDRESS>
-*/
 package cmd
 
 import (
@@ -22,19 +19,24 @@ import (
 	"google.golang.org/api/option"
 )
 
+const ModelFlash = "gemini-1.5-flash-latest"
+const ModelPro = "gemini-1.5-pro-latest"
+
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
-	Use:   "graderace-data-summarizer",
-	Short: "A brief description of your application",
-	Long: `A longer description that spans multiple lines and likely contains
-examples and usage of using your application. For example:
+	Use:   "graderace-data-summarizer URL",
+	Short: "指定したJRAのページの重賞データを要約します",
+	Long: `指定したJRAのページの重賞データを要約します。
+その後クリップボードへデータを要約を保存します。`,
+	Run: func(cmd *cobra.Command, args []string) {
+		tm, _ := cmd.Flags().GetString("model")
 
-Cobra is a CLI library for Go that empowers applications.
-This application is a tool to generate the needed files
-to quickly create a Cobra application.`,
-	// Uncomment the following line if your bare application
-	// has an action associated with it:
-	// Run: func(cmd *cobra.Command, args []string) { },
+		model := ModelFlash
+		if strings.Contains(tm, "pro") {
+			model = ModelPro
+		}
+		summarizeAndClipped(model)
+	},
 }
 
 // Execute は
@@ -47,7 +49,14 @@ func Execute() {
 	if err != nil {
 		os.Exit(1)
 	}
+}
 
+func init() {
+	rootCmd.Flags().StringP("model", "m", ModelFlash, fmt.Sprintf("Modelを指定します。デフォルトだと%sが利用されます。\n%sを使いたいときにはproと入力してください。\nproは制約によりエラーになる場合があります。", ModelFlash, ModelPro))
+}
+
+// summarizeAndClipped はデータを取得して、要約しクリップボードへ書き出す
+func summarizeAndClipped(model string) {
 	if err := godotenv.Load(".env"); err != nil {
 		log.Panic(err)
 	}
@@ -59,7 +68,7 @@ func Execute() {
 	}
 
 	ctx := context.Background()
-	summarize, err := runGemini(ctx, text)
+	summarize, err := runGemini(ctx, text, model)
 	if err != nil {
 		log.Panic(err)
 	}
@@ -67,19 +76,6 @@ func Execute() {
 	// 標準出力に出力して、clipboardへ書き込みも行う
 	fmt.Print(summarize)
 	clipboard.WriteAll(summarize)
-
-}
-
-func init() {
-	// Here you will define your flags and configuration settings.
-	// Cobra supports persistent flags, which, if defined here,
-	// will be global for your application.
-
-	// rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.graderace-data-summarizer.yaml)")
-
-	// Cobra also supports local flags, which will only run
-	// when this action is called directly.
-	rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 }
 
 // getAnalyzedRaceData は指定したデータ分析ページからテキストを抽出する
@@ -93,9 +89,6 @@ func getAnalyzedRaceData(url string) (string, error) {
 
 	// 対象ページはShiftJIS
 	utfBody := transform.NewReader(bufio.NewReader(res.Body), japanese.ShiftJIS.NewDecoder())
-	if err != nil {
-		return "", err
-	}
 
 	doc, err := goquery.NewDocumentFromReader(utfBody)
 	if err != nil {
@@ -122,20 +115,23 @@ func textnaizeCandinates(cs []*genai.Candidate) string {
 
 // runGemini はGeminiAIを実行する
 // 解析結果のテキストを返却する
-func runGemini(ctx context.Context, text string) (string, error) {
+// 利用するmodelはユーザーの指定による
+func runGemini(ctx context.Context, text, model string) (string, error) {
 	client, err := genai.NewClient(ctx, option.WithAPIKey(os.Getenv("GEMINI_API_KEY")))
 	if err != nil {
 		return "", err
 	}
 	defer client.Close()
 
-	//model := client.GenerativeModel("gemini-1.5-pro-latest")
-	model := client.GenerativeModel("gemini-1.5-flash-latest")
-
-	resp, err := model.GenerateContent(ctx, genai.Text(fmt.Sprintf("%s %s", "次の文章を要約してください。", text)))
+	genModel := client.GenerativeModel(model)
+	resp, err := genModel.GenerateContent(ctx, genai.Text(fmt.Sprintf("%s %s", "次の文章を要約してください。", text)))
 	if err != nil {
 		return "", err
 	}
+
+	fmt.Print("\n----- USED MODEL -----\n")
+	fmt.Print(model)
+	fmt.Print("\n----- USED MODEL -----\n")
 
 	return textnaizeCandinates(resp.Candidates), nil
 }
